@@ -1344,6 +1344,13 @@
     <longdescription/>
   </dtconfig>
   <dtconfig>
+    <name>plugins/lighttable/culling_dynamic_num_images</name>
+    <type>int</type>
+    <default>25</default>
+    <shortdescription>images to display in culling dynamic layout</shortdescription>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/lighttable/culling_zoom_mode</name>
     <type>int</type>
     <default>0</default>
@@ -3357,5 +3364,12 @@
     <default></default>
     <shortdescription>order or exclude midi devices</shortdescription>
     <longdescription>comma-separated list of device name fragments that if matched load midi device at id given by location in list or if preceded by - prevent matching devices from loading</longdescription>
+  </dtconfig>
+  <dtconfig>
+    <name>copy_on_hover</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>Enable copying editing history via Ctrl-C on mouse hover without selecting an image</shortdescription>
+    <longdescription>If an image has been selected, all actions will be applied on that selected image. Originally mouse-hover had higher priority and some people liked using it when copying edits. This flag returns to the legacy behavior which has been changed due to https://github.com/darktable-org/darktable/issues/6025 </longdescription>
   </dtconfig>
 </dtconfiglist>

@@ -813,7 +813,7 @@ void reset(dt_view_t *self)
 
 int try_enter(dt_view_t *self)
 {
-  int32_t imgid = dt_act_on_get_main_image();
+  int32_t imgid = dt_act_on_get_main_image(FALSE);
 
   if(imgid < 0)
   {

@@ -112,14 +112,16 @@ gboolean _cache_update(const gboolean only_visible, const gboolean force, const 
 {
   /** Here's how it works
    *
-   *             mouse over| x | x | x |   |   |
-   *     mouse inside table| x | x |   |   |   |
-   * mouse inside selection| x |   |   |   |   |
-   *          active images| ? | ? | x |   | x |
-   *                       |   |   |   |   |   |
-   *                       | S | O | O | S | A |
-   *  S = selection ; O = mouseover ; A = active images
-   *  the mouse can be outside thumbtable in case of filmstrip + mouse in center widget
+   * Priority is:
+   * Selection > Mouseover > Active Images
+   *
+   * Culling Dynamic has a different order:
+   * Mouseover > Active Images
+   *
+   * Fullscreen Views:
+   * Always full-screen image
+   *
+   *
    *
    *  if only_visible is FALSE, then it will add also not visible images because of grouping
    *  force define if we try to use cache or not
@@ -141,58 +143,59 @@ gboolean _cache_update(const gboolean only_visible, const gboolean force, const 
   }
 
   GList *l = NULL;
-  gboolean inside_sel = FALSE;
-  if(mouseover > 0)
+
+  const dt_view_t *v = dt_view_manager_get_current_view(darktable.view_manager);
+  gboolean lightroom_view = FALSE;
+  if(v) lightroom_view = (v->view(v) == DT_VIEW_LIGHTTABLE);
+
+
+  // check if we are in full preview mode
+  // if yes, the active image has priority over everything else
+  if(lightroom_view && dt_view_lighttable_preview_state(darktable.view_manager))
   {
-    // column 1,2,3
-    if(dt_ui_thumbtable(darktable.gui->ui)->mouse_inside)
-    {
-      // column 1,2
-      sqlite3_stmt *stmt;
-      gchar *query = g_strdup_printf("SELECT imgid FROM main.selected_images WHERE imgid=%d", mouseover);
-      DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
-      if(stmt != NULL && sqlite3_step(stmt) == SQLITE_ROW)
-      {
-        inside_sel = TRUE;
-        sqlite3_finalize(stmt);
-      }
-      g_free(query);
-
-      if(inside_sel)
-      {
-        // column 1
-
-        // first, we try to return cached list if we were already
-        // inside sel and the selection has not changed
-        if(!force && cache->ok && cache->image_over_inside_sel && cache->inside_table && cache->ordered == ordered)
-        {
-          return FALSE;
-        }
-
-        // we return the list of the selection
-        l = dt_selection_get_list(darktable.selection, only_visible, ordered);
-      }
-      else
-      {
-        // column 2
-        _insert_in_list(&l, mouseover, only_visible);
-      }
-    }
-    else
-    {
-      // column 3
-      _insert_in_list(&l, mouseover, only_visible);
-      // be absolutely sure we have the id in the list (in darkroom,
-      // the active image can be out of collection)
-      if(!only_visible) _insert_in_list(&l, mouseover, TRUE);
-    }
+    // if no mouse over, we pick active images
+    const int id = GPOINTER_TO_INT(darktable.view_manager->active_images->data);
+    _insert_in_list(&l, id, only_visible);
+    // be absolutely sure we have the id in the list (in darkroom,
+    // the active image can be out of collection)
+    if(!only_visible) _insert_in_list(&l, id, TRUE);
   }
-  else
+
+
+  // check if we are in culling dynamic because then we use a different order:
+  // hover > active > selected
+  // This is necessary since in culling dynamic mode we work on a subset of all images
+  // and every image in the subset is always selected.
+  // And since we always have at least 1 active image in culling dynamic, and the active
+  // image is always part of the selection we can ignore selected pictures completely
+
+  // Todo: is this sufficiant or is it necessary to check table->mode == DT_CULLING_MODE_CULLING as well?
+  //       It was done that way in the old code
+  else if(lightroom_view && dt_view_lighttable_get_layout(darktable.view_manager) == DT_LIGHTTABLE_LAYOUT_CULLING_DYNAMIC)
   {
-    // column 4,5
-    if(darktable.view_manager->active_images)
+    if(mouseover > 0)
     {
-      // column 5
+      // we only allow mouseover on active images
+      for(GSList *ll = darktable.view_manager->active_images; ll; ll = g_slist_next(ll))
+      {
+        if(GPOINTER_TO_INT(ll->data) == mouseover)
+        {
+          _insert_in_list(&l, mouseover, only_visible);
+
+          // Todo:
+          // not sure what the following line is supposed to do, just copied it from previous code
+
+          // be absolutely sure we have the id in the list (in darkroom,
+          // the active image can be out of collection)
+          if(!dt_ui_thumbtable(darktable.gui->ui)->mouse_inside && !only_visible)
+            _insert_in_list(&l, mouseover, TRUE);
+          break;
+        }
+      }
+    }
+    if(!l && darktable.view_manager->active_images)
+    {
+      // if no mouse over, we pick active images
       for(GSList *ll = darktable.view_manager->active_images; ll; ll = g_slist_next(ll))
       {
         const int id = GPOINTER_TO_INT(ll->data);
@@ -202,16 +205,53 @@ gboolean _cache_update(const gboolean only_visible, const gboolean force, const 
         if(!only_visible) _insert_in_list(&l, id, TRUE);
       }
     }
-    else
+  }
+  else
+  {
+    // any mode other than culling dynamic
+
+    // Selection has highest priority
+
+    // first, we try to return cached list if we were already
+    // inside sel and the selection has not changed
+    if(!force && cache->ok && cache->image_over_inside_sel && cache->inside_table && cache->ordered == ordered)
     {
-      // column 4
-      // we return the list of the selection
-      l = dt_selection_get_list(darktable.selection, only_visible, ordered);
+      return FALSE;
+    }
+
+    // otherwise we return the new list of the selection
+    l = dt_selection_get_list(darktable.selection, only_visible, ordered);
+
+
+    if(!l && mouseover > 0)
+    {
+      // if selection empty and we hover an image, select this image
+      _insert_in_list(&l, mouseover, only_visible);
+
+      // Todo:
+      // not sure what the following line is supposed to do, just copied it from previous code
+
+      // be absolutely sure we have the id in the list (in darkroom,
+      // the active image can be out of collection)
+      if(!dt_ui_thumbtable(darktable.gui->ui)->mouse_inside && !only_visible)
+        _insert_in_list(&l, mouseover, TRUE);
+    }
+
+    if(!l && darktable.view_manager->active_images)
+    {
+      // if no images to act on until now, we pick active images
+      for(GSList *ll = darktable.view_manager->active_images; ll; ll = g_slist_next(ll))
+      {
+        const int id = GPOINTER_TO_INT(ll->data);
+        _insert_in_list(&l, id, only_visible);
+        // be absolutely sure we have the id in the list (in darkroom,
+        // the active image can be out of collection)
+        if(!only_visible) _insert_in_list(&l, id, TRUE);
+      }
     }
   }
 
   // let's register the new list as cached
-  cache->image_over_inside_sel = inside_sel;
   cache->ordered = ordered;
   cache->image_over = mouseover;
   GList *ltmp = cache->images;
@@ -224,7 +264,6 @@ gboolean _cache_update(const gboolean only_visible, const gboolean force, const 
   cache->inside_table = dt_ui_thumbtable(darktable.gui->ui)->mouse_inside;
   cache->ok = TRUE;
 
-  // if needed, we show the list of cached images in terminal
   if((darktable.unmuted & DT_DEBUG_ACT_ON) == DT_DEBUG_ACT_ON)
   {
     gchar *tx = dt_util_dstrcat(NULL, "[images to act on] new cache (%s) : ", only_visible ? "visible" : "all");
@@ -255,82 +294,7 @@ GList *dt_act_on_get_images(const gboolean only_visible, const gboolean force, c
 // get the query to retrieve images to act on. this is useful to speedup actions if they already use sqlite queries
 gchar *dt_act_on_get_query(const gboolean only_visible)
 {
-  /** Here's how it works
-   *
-   *             mouse over| x | x | x |   |   |
-   *     mouse inside table| x | x |   |   |   |
-   * mouse inside selection| x |   |   |   |   |
-   *          active images| ? | ? | x |   | x |
-   *                       |   |   |   |   |   |
-   *                       | S | O | O | S | A |
-   *  S = selection ; O = mouseover ; A = active images
-   *  the mouse can be outside thumbtable in case of filmstrip + mouse in center widget
-   *
-   *  if only_visible is FALSE, then it will add also not visible images because of grouping
-   *  due to dt_selection_get_list_query limitation, order is always considered as undefined
-   **/
-
-  const int mouseover = dt_control_get_mouse_over_id();
-
-  GList *l = NULL;
-  gboolean inside_sel = FALSE;
-  if(mouseover > 0)
-  {
-    // column 1,2,3
-    if(dt_ui_thumbtable(darktable.gui->ui)->mouse_inside)
-    {
-      // column 1,2
-      sqlite3_stmt *stmt;
-      gchar *query = g_strdup_printf("SELECT imgid FROM main.selected_images WHERE imgid =%d", mouseover);
-      DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
-      if(stmt != NULL && sqlite3_step(stmt) == SQLITE_ROW)
-      {
-        inside_sel = TRUE;
-        sqlite3_finalize(stmt);
-      }
-      g_free(query);
-
-      if(inside_sel)
-      {
-        // column 1
-        return dt_selection_get_list_query(darktable.selection, only_visible, FALSE);
-      }
-      else
-      {
-        // column 2
-        _insert_in_list(&l, mouseover, only_visible);
-      }
-    }
-    else
-    {
-      // column 3
-      _insert_in_list(&l, mouseover, only_visible);
-      // be absolutely sure we have the id in the list (in darkroom,
-      // the active image can be out of collection)
-      if(!only_visible) _insert_in_list(&l, mouseover, TRUE);
-    }
-  }
-  else
-  {
-    // column 4,5
-    if(darktable.view_manager->active_images)
-    {
-      // column 5
-      for(GSList *ll = darktable.view_manager->active_images; ll; ll = g_slist_next(ll))
-      {
-        const int id = GPOINTER_TO_INT(ll->data);
-        _insert_in_list(&l, id, only_visible);
-        // be absolutely sure we have the id in the list (in darkroom,
-        // the active image can be out of collection)
-        if(!only_visible) _insert_in_list(&l, id, TRUE);
-      }
-    }
-    else
-    {
-      // column 4
-      return dt_selection_get_list_query(darktable.selection, only_visible, FALSE);
-    }
-  }
+  GList *l = dt_act_on_get_images(only_visible, FALSE, TRUE);
 
   // if we don't return the selection, we return the list of imgid separated by comma
   // in the form it can be used inside queries
@@ -350,45 +314,49 @@ gchar *dt_act_on_get_query(const gboolean only_visible)
 }
 
 // get the main image to act on during global changes (libs, accels)
-int dt_act_on_get_main_image()
+int dt_act_on_get_main_image(const gboolean prioritize_hover)
 {
   /** Here's how it works -- same as for list, except we don't care about mouse inside selection or table
    *
-   *             mouse over| x |   |   |
-   *          active images| ? |   | x |
-   *                       |   |   |   |
-   *                       | O | S | A |
-   *  First image of ...
-   *  S = selection ; O = mouseover ; A = active images
+   * Priority is:
+   *          (Mouseover >)           Selection > Active Images > Mouseover
+   * (if prioritize_hover == TRUE)
+   *
+   *
    **/
 
   int ret = -1;
   const int mouseover = dt_control_get_mouse_over_id();
 
-  if(mouseover > 0)
+  if(prioritize_hover && mouseover > 0)
   {
     ret = mouseover;
   }
   else
   {
-    if(darktable.view_manager->active_images)
+    sqlite3_stmt *stmt;
+    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                                "SELECT s.imgid"
+                                " FROM main.selected_images as s, memory.collected_images as c"
+                                " WHERE s.imgid=c.imgid"
+                                " ORDER BY c.rowid LIMIT 1",
+                                -1, &stmt, NULL);
+    if(stmt != NULL && sqlite3_step(stmt) == SQLITE_ROW)
+    {
+      ret = sqlite3_column_int(stmt, 0);
+    }
+    if(stmt) sqlite3_finalize(stmt);
+
+    if(ret == -1 && darktable.view_manager->active_images)
     {
       ret = GPOINTER_TO_INT(darktable.view_manager->active_images->data);
     }
-    else
+
+    if(ret == -1)
     {
-      sqlite3_stmt *stmt;
-      DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                                  "SELECT s.imgid"
-                                  " FROM main.selected_images as s, memory.collected_images as c"
-                                  " WHERE s.imgid=c.imgid"
-                                  " ORDER BY c.rowid LIMIT 1",
-                                  -1, &stmt, NULL);
-      if(stmt != NULL && sqlite3_step(stmt) == SQLITE_ROW)
-      {
-        ret = sqlite3_column_int(stmt, 0);
-      }
-      if(stmt) sqlite3_finalize(stmt);
+      // and if active images is also empty, we set return to mouseover
+      // we don't have to check if mouseover is >0 because ret=-1 at this point anyway, so nothing changes
+      ret = mouseover;
     }
   }
 
@@ -412,7 +380,6 @@ int dt_act_on_get_images_nb(const gboolean only_visible, const gboolean force)
 
     if(_test_cache(cache)) return cache->images_nb;
   }
-
 
   // otherwise we update the cache
   _cache_update(only_visible, force, FALSE);

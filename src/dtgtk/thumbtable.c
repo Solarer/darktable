@@ -854,7 +854,7 @@ static void _filemanager_zoom(dt_thumbtable_t *table, int oldzoom, int newzoom)
   if(!thumb)
   {
     // otherwise we use the classic retrieving method
-    const int id = dt_act_on_get_main_image();
+    const int id = dt_act_on_get_main_image(FALSE);
     thumb = _thumbtable_get_thumb(table, id);
     if(thumb)
     {
@@ -2181,13 +2181,13 @@ gboolean dt_thumbtable_set_offset_image(dt_thumbtable_t *table, const int imgid,
 static gboolean _accel_copy(GtkAccelGroup *accel_group, GObject *acceleratable, const guint keyval,
                             GdkModifierType modifier, gpointer data)
 {
-  dt_history_copy(dt_act_on_get_main_image());
+  dt_history_copy(dt_act_on_get_main_image(dt_conf_get_bool("copy_on_hover")));
   return TRUE;
 }
 static gboolean _accel_copy_parts(GtkAccelGroup *accel_group, GObject *acceleratable, const guint keyval,
                                   GdkModifierType modifier, gpointer data)
 {
-  dt_history_copy_parts(dt_act_on_get_main_image());
+  dt_history_copy_parts(dt_act_on_get_main_image(dt_conf_get_bool("copy_on_hover")));
   return TRUE;
 }
 static gboolean _accel_paste(GtkAccelGroup *accel_group, GObject *acceleratable, const guint keyval,
@@ -2239,7 +2239,7 @@ static gboolean _accel_duplicate(GtkAccelGroup *accel_group, GObject *accelerata
 {
   dt_undo_start_group(darktable.undo, DT_UNDO_DUPLICATE);
 
-  const int32_t sourceid = dt_act_on_get_main_image();
+  const int32_t sourceid = dt_act_on_get_main_image(FALSE);
   const int32_t newimgid = dt_image_duplicate(sourceid);
   if(newimgid <= 0) return FALSE;
 
